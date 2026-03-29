@@ -438,11 +438,15 @@ function cleanFramerNoise(htmlPath) {
   let c = fs.readFileSync(htmlPath, 'utf8');
   const original = c;
 
+  // Remove data-framer-hydrate-v2 from #main - this forces SPA to use URL-based routing
+  // instead of always rendering the routeId baked into the HTML (which is always the home page)
+  c = c.replace(/\s*data-framer-hydrate-v2="[^"]*"/g, '');
+
   // Remove "Made in Framer" comment
   c = c.replace(/<!--\s*Made in Framer[^>]*-->\s*/g, '');
 
-  // Remove badge container (long single-line div)
-  c = c.replace(/<div id="__framer-badge-container">[\s\S]*?<\/div>\s*<\/div>\s*(?=<script>var animator=)/, '\n');
+  // Remove badge container (has SSR markers like <!--$--> inside)
+  c = c.replace(/<div id="__framer-badge-container">[\s\S]*?<\/div>\s*<\/div>\s*/g, '');
 
   // Remove editorbar container button
   c = c.replace(/<div id="__framer-editorbar-container"[\s\S]*?<\/div>\s*/g, '');
