@@ -14,9 +14,11 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { execSync } = require('child_process');
 
 const { URL } = require('url');
+const TMP = os.tmpdir();
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -53,7 +55,7 @@ function analyzeSite(htmlPath) {
 
   if (htmlPath.startsWith('http://') || htmlPath.startsWith('https://')) {
     log('Fetching HTML from URL...');
-    const tmp = '/tmp/framer-export-index.html';
+    const tmp = path.join(TMP, 'framer-export-index.html');
     curl(htmlPath, tmp);
     html = fs.readFileSync(tmp, 'utf8');
   } else {
