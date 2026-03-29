@@ -13,9 +13,15 @@ Export any Framer website to fully self-hosted local files — no Framer CDN, no
 ## Setup
 
 ```bash
-# Install once
-npm install -g framer-export
-# Or clone and run directly with node
+# Install from GitHub (one line)
+npm install -g git+https://github.com/zaynors/framer-export.git
+
+# To update to the latest version
+npm install -g git+https://github.com/zaynors/framer-export.git --force
+
+# Or clone and run directly
+git clone https://github.com/zaynors/framer-export.git
+node framer-export/scripts/export.js <url-or-html-file>
 ```
 
 ## Usage
