@@ -49,7 +49,7 @@ function download(url, outputDir, filename) {
 
 // ─── Step 1: Analyze ─────────────────────────────────────────────────────
 
-function analyzeSite(htmlPath) {
+function analyzeSite(htmlPath, baseDir) {
   logStep(1, 'Analyzing site...');
   let html;
 
@@ -84,12 +84,11 @@ function analyzeSite(htmlPath) {
 
   // Find HTML files that need processing
   const htmlFiles = [];
-  const htmlDir = path.dirname(path.resolve(htmlPath));
-  findHtmlFiles(htmlDir, htmlDir, htmlFiles);
+  findHtmlFiles(baseDir, baseDir, htmlFiles);
   htmlFiles.sort();
 
   // Find all JS files and their import references
-  const jsDir = path.join(path.dirname(path.resolve(htmlPath)), 'js');
+  const jsDir = path.join(baseDir, 'js');
   const allJsFiles = jsDir && fs.existsSync(jsDir) ? fs.readdirSync(jsDir).filter(f => f.endsWith('.mjs') || f.endsWith('.js')) : [];
 
   log(`  JS files: ${jsUrls.length} from CDN, ${allJsFiles.length} local`);
@@ -119,8 +118,7 @@ function findHtmlFiles(baseDir, currentDir, results) {
 
 function downloadAssets(analysis, opts = {}) {
   logStep(2, 'Downloading assets...');
-  const { htmlPath, skipFonts } = opts;
-  const baseDir = path.dirname(path.resolve(htmlPath));
+  const { htmlPath, baseDir, skipFonts } = opts;
   const jsDir = path.join(baseDir, 'js');
   const cssDir = path.join(baseDir, 'css');
   const imgDir = path.join(baseDir, 'images');
@@ -326,10 +324,9 @@ function fixJsImports(jsDir) {
 
 // ─── Step 4: Update HTML references ─────────────────────────────────────
 
-function fixHtmlRefs(htmlPath, renameMap, { downloadedJs, downloadedMedia }) {
+function fixHtmlRefs(htmlPath, renameMap, { downloadedJs, downloadedMedia }, baseDir) {
   logStep(4, 'Updating HTML references...');
   let html = fs.readFileSync(htmlPath, 'utf8');
-  const baseDir = path.dirname(path.resolve(htmlPath));
 
   // Build full URL → local path map
   const urlToLocal = {};
@@ -471,9 +468,8 @@ function cleanFramerNoise(htmlPath) {
 
 // ─── Step 6: Fix SPA routing ─────────────────────────────────────────────
 
-function fixSpaRouting(htmlPath) {
+function fixSpaRouting(htmlPath, baseDir) {
   logStep(6, 'Fixing SPA routing...');
-  const baseDir = path.dirname(path.resolve(htmlPath));
 
   // Discover all HTML files to build route list
   const routes = [{ path: '/', file: 'index.html' }];
@@ -695,13 +691,20 @@ Options:
   log('Framer Exporter starting...');
   log(`Source: ${htmlPath}`);
 
-  const analysis = analyzeSite(htmlPath);
-  const downloadedAssets = downloadAssets(analysis, { htmlPath, skipFonts: !opts.withFonts });
-  const renameMap = fixJsImports(path.join(path.dirname(path.resolve(htmlPath)), 'js'));
-  fixHtmlRefs(htmlPath, renameMap, downloadedAssets);
+  // Determine base output directory
+  const isUrl = htmlPath.startsWith('http://') || htmlPath.startsWith('https://');
+  const baseDir = isUrl
+    ? path.join(process.cwd(), new URL(htmlPath).hostname)
+    : path.dirname(path.resolve(htmlPath));
+
+  log(`Output dir: ${baseDir}`);
+
+  const analysis = analyzeSite(htmlPath, baseDir);
+  const downloadedAssets = downloadAssets(analysis, { htmlPath, baseDir, skipFonts: !opts.withFonts });
+  const renameMap = fixJsImports(path.join(baseDir, 'js'));
+  fixHtmlRefs(htmlPath, renameMap, downloadedAssets, baseDir);
   if (opts.clean) cleanFramerNoise(htmlPath);
-  const baseDir = path.dirname(path.resolve(htmlPath));
-  const routes = opts.spa ? fixSpaRouting(htmlPath) : [];
+  const routes = opts.spa ? fixSpaRouting(htmlPath, baseDir) : [];
   if (opts.spa) generateServer(baseDir, routes);
 
   log('\n✅ Export complete!');
