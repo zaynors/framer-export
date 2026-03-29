@@ -27,11 +27,14 @@ node framer-export/scripts/export.js <url-or-html-file>
 ## Usage
 
 ```bash
-# Export from a live Framer site
-npx framer-export https://your-site.framer.app
+# After installing, run from any directory
+framer-export https://your-site.framer.app
 
 # Or from local HTML files
-npx framer-export ./my-exported-site/index.html
+framer-export ./my-exported-site/index.html
+
+# If you cloned instead of npm installing
+node scripts/export.js https://your-site.framer.app
 
 # Options
 --no-clean    Skip Framer noise removal
