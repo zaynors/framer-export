@@ -69,7 +69,7 @@ function analyzeSite(htmlPath, baseDir) {
 
   const jsUrls = allUrls.filter(u => u.endsWith('.js') || u.endsWith('.mjs'));
   const cssUrls = allUrls.filter(u => u.endsWith('.css'));
-  const imgUrls = allUrls.filter(u => /\.(png|jpg|jpeg|webp|gif|svg)(\?|$)/.test(u));
+  const imgUrls = allUrls.filter(u => /\.(png|jpg|jpeg|webp|gif|svg)(\?|$)/.test(u) || u.includes('framerusercontent.com/images/') || u.includes('framerusercontent.com/assets/'));
   const fontUrls = allUrls.filter(u => u.includes('fonts.gstatic') || u.includes('framerusercontent.com/assets/') && u.endsWith('.woff2'));
   const knownTypeSet = new Set([...jsUrls, ...cssUrls, ...imgUrls, ...fontUrls]);
   // Only URLs from known CDN domains that point to downloadable files with extensions
@@ -155,11 +155,13 @@ function downloadAssets(analysis, opts = {}) {
   });
 
   // Download images
+  const downloadedImages = {};
   analysis.imgUrls.forEach(url => {
     try {
       const name = path.basename(url.split('?')[0]);
       const imgName = `img-${name}`;
       curl(url, path.join(imgDir, imgName));
+      downloadedImages[url] = imgName;
       log(`  IMG: ${name}`);
     } catch(e) {
       log(`  Warning: failed to download image: ${url}`);
@@ -182,14 +184,7 @@ function downloadAssets(analysis, opts = {}) {
   log('Assets downloaded.');
 
   // Download search index if present
-  const searchMatch = analysis.allUrls.find(u => u.includes('searchIndex'));
-  if (searchMatch) {
-    try {
-      download(searchMatch, jsDir, 'searchIndex.json');
-    } catch(e) {}
-  }
-
-  return { downloadedJs, downloadedMedia };
+  return { downloadedJs, downloadedImages, downloadedMedia };
 }
 
 // ─── Step 3: Fix imports in JS files ────────────────────────────────────
@@ -324,7 +319,7 @@ function fixJsImports(jsDir) {
 
 // ─── Step 4: Update HTML references ─────────────────────────────────────
 
-function fixHtmlRefs(htmlPath, renameMap, { downloadedJs, downloadedMedia }, baseDir) {
+function fixHtmlRefs(htmlPath, renameMap, { downloadedJs, downloadedImages, downloadedMedia }, baseDir) {
   logStep(4, 'Updating HTML references...');
   let html = fs.readFileSync(htmlPath, 'utf8');
 
@@ -370,14 +365,17 @@ function fixHtmlRefs(htmlPath, renameMap, { downloadedJs, downloadedMedia }, bas
     return match ? `js/${match}` : m;
   });
 
-  // Replace image URLs in src=, srcset=, href= (favicons), content= (og:image)
-  const imgDir = path.join(baseDir, 'images');
-  const imgFiles = fs.existsSync(imgDir) ? fs.readdirSync(imgDir) : [];
-  const stripQs = (u) => u.split('?')[0];
-  html = html.replace(/https:\/\/framerusercontent\.com\/images\/([^?]+)(\?[^"]*)?/g, (m, filename, qs) => {
-    const baseName = stripQs(filename).split('/').pop().split('.')[0].substring(0, 10);
-    const match = imgFiles.find(f => f.includes(baseName));
-    return match ? `images/${match}` : m;
+  // Replace image URLs (framerusercontent.com/images/ and assets/)
+  // Use exact URL→local map for reliable replacement
+  Object.entries(downloadedImages).forEach(([url, filename]) => {
+    const localPath = `images/${filename}`;
+    // Handle URL as-is (no query params)
+    html = html.split(url).join(localPath);
+    // Handle URL with query params (strip query string)
+    const urlBase = url.split('?')[0];
+    if (urlBase !== url) {
+      html = html.split(urlBase).join(localPath);
+    }
   });
 
   // Fix modulepreload links — add /js/ prefix to hash-based filenames
