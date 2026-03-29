@@ -773,7 +773,71 @@ Options:
 
   const analysis = analyzeSite(htmlPath, baseDir);
   const downloadedAssets = downloadAssets(analysis, { htmlPath, baseDir, skipFonts: !opts.withFonts, sourceUrl });
+
+  // Extract dynamic import URLs from downloaded JS files and download any missing modules
+  // This handles Framer's dynamic import() calls which aren't in HTML
+  const jsDir = path.join(baseDir, 'js');
+  if (fs.existsSync(jsDir)) {
+    const jsFiles = fs.readdirSync(jsDir).filter(f => f.endsWith('.mjs') || f.endsWith('.js'));
+    // Match dynamic imports: import(`./name.mjs`), import('./name.mjs'), import("./name.mjs")
+    const dynamicImportRegex = /import\(\x60\.\/([^\x60]+\.mjs)\x60\)|import\(['"]\.\/([^'")]*\.mjs)['"]\)/g;
+    const foundDynamicUrls = [];
+    jsFiles.forEach(f => {
+      const content = fs.readFileSync(path.join(jsDir, f), 'utf8');
+      let match;
+      while ((match = dynamicImportRegex.exec(content)) !== null) {
+        // match[1] = backtick style (./name.mjs), match[2] = quote style
+        const moduleName = match[1] || match[2];
+        if (moduleName) foundDynamicUrls.push(moduleName);
+      }
+    });
+    if (foundDynamicUrls.length > 0) {
+      log(`Found ${foundDynamicUrls.length} dynamic import references to resolve`);
+      // Find script_main URL from HTML to construct full CDN URLs
+      const scriptMainPattern = /https:\/\/framerusercontent\.com\/sites\/([^\/]+)\/script_main\.[^\/]+\.mjs/;
+      const htmlContent = fs.readFileSync(htmlPath, 'utf8');
+      const scriptMainMatch = htmlContent.match(scriptMainPattern);
+      if (scriptMainMatch) {
+        const scriptMainUrl = scriptMainMatch[0];
+        const baseCdn = scriptMainUrl.replace(/\/script_main\.[^/]+\.mjs$/, '');
+        const extraUrls = [];
+        foundDynamicUrls.forEach(moduleName => {
+          // Skip if already exists locally
+          const localName = path.basename(moduleName.split('?')[0]);
+          if (!jsFiles.includes(localName)) {
+            // Strip leading ./ from moduleName (for backtick-style imports)
+            const cleanName = moduleName.replace(/^\.\//, '');
+            extraUrls.push(`${baseCdn}/${cleanName}`);
+          }
+        });
+        if (extraUrls.length > 0) {
+          log(`Downloading ${extraUrls.length} dynamically-imported modules...`);
+          extraUrls.forEach(url => {
+            const name = path.basename(url.split('?')[0]);
+            const dest = path.join(jsDir, name);
+            try {
+              curl(url, dest, sourceUrl);
+              log(`  Dynamic: ${name}`);
+            } catch(e) {
+              log(`  Warning: failed to download dynamic module: ${name}`);
+            }
+          });
+        }
+      }
+    }
+  }
   const renameMap = fixJsImports(path.join(baseDir, 'js'));
+
+  // Update downloadedJs to map CDN URLs → final renamed filenames
+  // downloadAssets returns shortNames (pre-rename), but files got renamed to renameMap values
+  const { downloadedJs, downloadedImages, downloadedMedia } = downloadedAssets;
+  Object.keys(downloadedJs).forEach(cdnUrl => {
+    const oldLocalName = downloadedJs[cdnUrl];
+    if (renameMap[oldLocalName]) {
+      downloadedJs[cdnUrl] = renameMap[oldLocalName];
+    }
+  });
+
   fixHtmlRefs(htmlPath, renameMap, downloadedAssets, baseDir);
   if (opts.clean) cleanFramerNoise(htmlPath);
   const routes = opts.spa ? fixSpaRouting(htmlPath, baseDir, sourceUrl) : [];

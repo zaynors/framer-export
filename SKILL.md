@@ -45,6 +45,8 @@ Create `js/`, `css/`, `images/`, `media/` directories alongside `index.html`.
 ### Step 3: Download all external resources
 Download all JS, CSS, images, and media files (video, PDF, audio, documents) to local directories. Skip fonts by default unless user requests them (fonts from `framerusercontent.com/assets/*.woff2` are OK to keep external — they carry no visible branding).
 
+**Important: Extract dynamic import URLs from script_main.mjs**. Framer's SPA router (`script_main.*.mjs`) dynamically imports page modules via `` import(`./hash-name.mjs`) ``. These URLs are NOT in HTML and won't be caught by scanning HTML alone. After downloading JS from HTML, scan all downloaded JS files for `import(\`./...mjs\`)` patterns, construct full CDN URLs from the script_main base path, and download those dynamic modules too.
+
 ### Step 4: Fix ES module imports in JS files
 Many Framer exports have `import` statements referencing CDN filenames like `7zd_4hdYd8O.mjs`. Rename these to short local names and update all import paths:
 - `from "./7zd_4hdYd8O-dG7PZxJrnFUX2tGHHFGd1cKXxhsQWgA.B72Ql4Dm.mjs"` → `from "./site-home.mjs"`
