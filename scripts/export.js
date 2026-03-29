@@ -98,7 +98,7 @@ function analyzeSite(htmlPath, baseDir) {
   log(`  Font files: ${fontUrls.length} (skipped by default)`);
   log(`  HTML files to process: ${htmlFiles.length}`);
 
-  return { html, allUrls, jsUrls, cssUrls, imgUrls, mediaUrls, fontUrls, htmlFiles, allJsFiles, htmlDir };
+  return { html, allUrls, jsUrls, cssUrls, imgUrls, mediaUrls, fontUrls, htmlFiles, allJsFiles, baseDir };
 }
 
 function findHtmlFiles(baseDir, currentDir, results) {
@@ -698,6 +698,14 @@ Options:
     : path.dirname(path.resolve(htmlPath));
 
   log(`Output dir: ${baseDir}`);
+
+  // When source is URL, download HTML to baseDir/index.html and use that from now on
+  if (isUrl) {
+    if (!fs.existsSync(baseDir)) fs.mkdirSync(baseDir, { recursive: true });
+    const tmpHtml = path.join(baseDir, 'index.html');
+    exec(`curl -sL "${htmlPath}" -o "${tmpHtml}"`);
+    htmlPath = tmpHtml;
+  }
 
   const analysis = analyzeSite(htmlPath, baseDir);
   const downloadedAssets = downloadAssets(analysis, { htmlPath, baseDir, skipFonts: !opts.withFonts });
