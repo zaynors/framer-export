@@ -392,15 +392,15 @@ function fixHtmlRefs(htmlPath, renameMap, { downloadedJs, downloadedImages, down
   });
 
   // Replace image URLs (framerusercontent.com/images/ and assets/)
-  // Use exact URL→local map for reliable replacement
+  // Replace by base URL (without query params) so ?width=... doesn't break the path
   Object.entries(downloadedImages).forEach(([url, filename]) => {
     const localPath = `images/${filename}`;
-    // Handle URL as-is (no query params)
-    html = html.split(url).join(localPath);
-    // Handle URL with query params (strip query string)
     const urlBase = url.split('?')[0];
+    // Replace all occurrences of the base URL in the HTML
+    html = html.split(urlBase).join(localPath);
+    // If original URL had query params, also replace the full URL (params will be discarded)
     if (urlBase !== url) {
-      html = html.split(urlBase).join(localPath);
+      html = html.split(url).join(localPath);
     }
   });
 
@@ -519,6 +519,23 @@ function fixSpaRouting(htmlPath, baseDir) {
         const slug = entry.name.replace(/\.html$/, '');
         routes.push({ path: `/${slug}`, file: `${slug}.html` });
       }
+    }
+  }
+
+  // Also extract routes from script_main.*.mjs (Framer SPA router)
+  const jsDir = path.join(baseDir, 'js');
+  if (fs.existsSync(jsDir)) {
+    const scriptMain = fs.readdirSync(jsDir).find(f => f.startsWith('script_main.'));
+    if (scriptMain) {
+      const content = fs.readFileSync(path.join(jsDir, scriptMain), 'utf8');
+      // Match path:`/route` patterns
+      const routeMatches = content.match(/path:`([^`]+)`/g) || [];
+      routeMatches.forEach(m => {
+        const routePath = m.match(/path:`([^`]+)`/)[1];
+        if (!routes.find(r => r.path === routePath)) {
+          routes.push({ path: routePath, file: 'index.html' });
+        }
+      });
     }
   }
 
