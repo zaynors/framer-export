@@ -492,7 +492,7 @@ function cleanFramerNoise(htmlPath) {
 
 // ─── Step 6: Fix SPA routing ─────────────────────────────────────────────
 
-function fixSpaRouting(htmlPath, baseDir) {
+function fixSpaRouting(htmlPath, baseDir, sourceUrl) {
   logStep(6, 'Fixing SPA routing...');
 
   // Discover all HTML files to build route list
@@ -537,6 +537,28 @@ function fixSpaRouting(htmlPath, baseDir) {
         }
       });
     }
+  }
+
+  // Also fetch sitemap.xml to discover all routes (Framer sites have this)
+  if (sourceUrl) {
+    try {
+      const sitemapUrl = sourceUrl.replace(/\/$/, '') + '/sitemap.xml';
+      const sitemapTmp = path.join(TMP, 'framer-export-sitemap.xml');
+      curl(sitemapUrl, sitemapTmp);
+      const sitemap = fs.readFileSync(sitemapTmp, 'utf8');
+      const sitemapRoutes = sitemap.match(/<loc>[^<]+<\/loc>/g) || [];
+      sitemapRoutes.forEach(loc => {
+        const url = loc.replace(/<\/?loc>/g, '');
+        try {
+          const u = new URL(url);
+          const routePath = u.pathname;
+          if (!routes.find(r => r.path === routePath)) {
+            routes.push({ path: routePath, file: 'index.html' });
+          }
+        } catch(e) {}
+      });
+      log(`  Found ${sitemapRoutes.length} routes from sitemap.xml`);
+    } catch(e) {}
   }
 
   findHtmlFiles(baseDir);
@@ -754,7 +776,7 @@ Options:
   const renameMap = fixJsImports(path.join(baseDir, 'js'));
   fixHtmlRefs(htmlPath, renameMap, downloadedAssets, baseDir);
   if (opts.clean) cleanFramerNoise(htmlPath);
-  const routes = opts.spa ? fixSpaRouting(htmlPath, baseDir) : [];
+  const routes = opts.spa ? fixSpaRouting(htmlPath, baseDir, sourceUrl) : [];
   if (opts.spa) generateServer(baseDir, routes);
 
   log('\n✅ Export complete!');
