@@ -34,8 +34,31 @@ function exec(cmd) {
   }
 }
 
-function curl(url, outputPath) {
-  exec(`curl -sL "${url}" -o "${outputPath}"`);
+function curl(url, outputPath, referer) {
+  const headers = [
+    referer ? `-H "Referer: ${referer}"` : '',
+    `-H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"`,
+  ].filter(Boolean).join(' ');
+  // Convert /tmp to Windows temp dir for Git Bash/msys compatibility
+  const resolvedPath = outputPath.replace(/^\/tmp\//, `${TMP}\\`);
+  exec(`curl -sL -o "${resolvedPath}" "${url}" ${headers}`);
+
+  // For images and media, verify content is valid (not a Framer JSON error)
+  const isImage = /\.(png|jpg|jpeg|webp|gif|svg|ico)(\?|$)/i.test(url);
+  const isMedia = /\.(mp4|webm|mp3|pdf|zip)(\?|$)/i.test(url);
+  if (isImage || isMedia) {
+    const buf = Buffer.alloc(4);
+    const fd = fs.openSync(resolvedPath, 'r');
+    fs.readSync(fd, buf, 0, 4, 0);
+    fs.closeSync(fd);
+    const magic = buf.toString('latin1');
+    // PNG=\x89PNG, JPEG=\xff\xd8\xff, GIF=GIF8, WebP=RIFL, PDF=%PDF, SVG=<svg
+    const validMagic = ['\x89PN', '\xff\xd8\xff', 'GIF8', 'RIFL', '%PDF', '<sv'];
+    if (!validMagic.some(m => magic.startsWith(m))) {
+      fs.unlinkSync(resolvedPath);
+      throw new Error(`Invalid content for ${url}`);
+    }
+  }
 }
 
 function download(url, outputDir, filename) {
@@ -69,8 +92,9 @@ function analyzeSite(htmlPath, baseDir) {
 
   const jsUrls = allUrls.filter(u => u.endsWith('.js') || u.endsWith('.mjs'));
   const cssUrls = allUrls.filter(u => u.endsWith('.css'));
-  const imgUrls = allUrls.filter(u => /\.(png|jpg|jpeg|webp|gif|svg)(\?|$)/.test(u) || u.includes('framerusercontent.com/images/') || u.includes('framerusercontent.com/assets/'));
-  const fontUrls = allUrls.filter(u => u.includes('fonts.gstatic') || u.includes('framerusercontent.com/assets/') && u.endsWith('.woff2'));
+  const imgExtensions = /\.(png|jpg|jpeg|webp|gif|svg)(\?|$)/i;
+  const imgUrls = allUrls.filter(u => imgExtensions.test(u) || u.includes('framerusercontent.com/images/'));
+  const fontUrls = allUrls.filter(u => u.includes('fonts.gstatic') || u.includes('framerusercontent.com/assets/'));
   const knownTypeSet = new Set([...jsUrls, ...cssUrls, ...imgUrls, ...fontUrls]);
   // Only URLs from known CDN domains that point to downloadable files with extensions
   const mediaExtensions = /\.(mp4|webm|ogg|mov|avi|mkv|wmv|pdf|mp3|wav|flac|aac|opus|zip|tar|gz|rar|7z|doc|docx|xls|xlsx|ppt|pptx)(\?|$)/i;
@@ -118,7 +142,7 @@ function findHtmlFiles(baseDir, currentDir, results) {
 
 function downloadAssets(analysis, opts = {}) {
   logStep(2, 'Downloading assets...');
-  const { htmlPath, baseDir, skipFonts } = opts;
+  const { htmlPath, baseDir, skipFonts, sourceUrl } = opts;
   const jsDir = path.join(baseDir, 'js');
   const cssDir = path.join(baseDir, 'css');
   const imgDir = path.join(baseDir, 'images');
@@ -135,7 +159,7 @@ function downloadAssets(analysis, opts = {}) {
     // Generate a short unique name
     const shortName = name.replace(/^[a-f0-9]{20,}\./, 'chunk-').replace(/\.mjs$/, '.mjs');
     try {
-      curl(url, path.join(jsDir, shortName));
+      curl(url, path.join(jsDir, shortName), sourceUrl);
       downloadedJs[url] = shortName;
       log(`  JS: ${name} → ${shortName}`);
     } catch(e) {
@@ -147,7 +171,7 @@ function downloadAssets(analysis, opts = {}) {
   analysis.cssUrls.forEach(url => {
     const name = path.basename(url.split('?')[0]);
     try {
-      curl(url, path.join(cssDir, name));
+      curl(url, path.join(cssDir, name), sourceUrl);
       log(`  CSS: ${name}`);
     } catch(e) {
       err(`Failed to download CSS: ${url}`);
@@ -160,7 +184,7 @@ function downloadAssets(analysis, opts = {}) {
     try {
       const name = path.basename(url.split('?')[0]);
       const imgName = `img-${name}`;
-      curl(url, path.join(imgDir, imgName));
+      curl(url, path.join(imgDir, imgName), sourceUrl);
       downloadedImages[url] = imgName;
       log(`  IMG: ${name}`);
     } catch(e) {
@@ -173,7 +197,7 @@ function downloadAssets(analysis, opts = {}) {
   analysis.mediaUrls.forEach(url => {
     try {
       const name = path.basename(url.split('?')[0]);
-      curl(url, path.join(mediaDir, name));
+      curl(url, path.join(mediaDir, name), sourceUrl);
       downloadedMedia[url] = name;
       log(`  MEDIA: ${name}`);
     } catch(e) {
@@ -691,6 +715,7 @@ Options:
 
   // Determine base output directory
   const isUrl = htmlPath.startsWith('http://') || htmlPath.startsWith('https://');
+  const sourceUrl = isUrl ? htmlPath : null;
   const baseDir = isUrl
     ? path.join(process.cwd(), new URL(htmlPath).hostname)
     : path.dirname(path.resolve(htmlPath));
@@ -706,7 +731,7 @@ Options:
   }
 
   const analysis = analyzeSite(htmlPath, baseDir);
-  const downloadedAssets = downloadAssets(analysis, { htmlPath, baseDir, skipFonts: !opts.withFonts });
+  const downloadedAssets = downloadAssets(analysis, { htmlPath, baseDir, skipFonts: !opts.withFonts, sourceUrl });
   const renameMap = fixJsImports(path.join(baseDir, 'js'));
   fixHtmlRefs(htmlPath, renameMap, downloadedAssets, baseDir);
   if (opts.clean) cleanFramerNoise(htmlPath);
