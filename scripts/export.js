@@ -579,38 +579,44 @@ function fixSpaRouting(htmlPath, baseDir, sourceUrl) {
   // Get list of known route slugs for link fixing
   const knownDirs = routes.filter(r => r.path !== '/').map(r => r.path.replace(/^\//, '').replace(/\/$/, ''));
 
-  // Fix nav links in ALL HTML files - make relative paths absolute
-  // This ensures links like ./blogs or ./pricing work correctly from any page
+  // Fix nav links in ALL HTML files
+  // The downloaded pages have href="/blogs/index.html" but should be href="/blogs"
+  // The server maps /blogs → blogs/index.html, so links should use /blogs format
   allHtmlFiles.forEach(f => {
     let content = fs.readFileSync(f, 'utf8');
     let modified = false;
 
-    // Replace ./ with / for internal page links (not files with extensions, not external URLs)
+    // Fix /slug/index.html → /slug for all known route slugs
+    knownDirs.forEach(slug => {
+      // href="/blogs/index.html" → href="/blogs"
+      const pattern1 = new RegExp(`href="/${slug}/index\\.html"`, 'g');
+      if (content.match(pattern1)) { content = content.replace(pattern1, `href="/${slug}"`); modified = true; }
+
+      // href="/blogs/" → href="/blogs"
+      const pattern2 = new RegExp(`href="/${slug}/"`, 'g');
+      if (content.match(pattern2)) { content = content.replace(pattern2, `href="/${slug}"`); modified = true; }
+
+      // href="./blogs" or href="./blogs/" → href="/blogs"
+      const pattern3 = new RegExp(`href="./${slug}/index\\.html"`, 'g');
+      if (content.match(pattern3)) { content = content.replace(pattern3, `href="/${slug}"`); modified = true; }
+      const pattern4 = new RegExp(`href="./${slug}"`, 'g');
+      if (content.match(pattern4)) { content = content.replace(pattern4, `href="/${slug}"`); modified = true; }
+      const pattern5 = new RegExp(`href="./${slug}/"`, 'g');
+      if (content.match(pattern5)) { content = content.replace(pattern5, `href="/${slug}"`); modified = true; }
+    });
+
+    // Fix href="./" (root link)
+    content = content.replace(/href="\.\/"/g, 'href="/"');
+
+    // Also fix any remaining ./slug patterns that might not be in knownDirs
     content = content.replace(/href="\.\/([^"]+)"/g, (m, p) => {
-      // Skip if it looks like a file reference (has extension before first ? or #)
-      if (p.includes('.') && !p.includes('/')) return m;
-      // Skip external URLs
-      if (p.startsWith('http') || p.startsWith('//')) return m;
-      // Skip anchors
-      if (p.startsWith('#')) return m;
-      // Skip query-only paths
-      if (p.startsWith('?')) return m;
+      if (p.startsWith('http') || p.startsWith('//') || p.startsWith('#') || p.startsWith('?')) return m;
       return `href="/${p.replace(/^\/+/, '')}"`;
     });
 
-    // Also fix href="./" (root link)
-    content = content.replace(/href="\.\/"/g, 'href="/"');
-
-    // Fix any href that points to a route slug we know (e.g., href="blogs" → href="/blogs")
-    knownDirs.forEach(slug => {
-      // Match href="blogs" or href="blogs/" when it's a top-level route
-      const exactPattern = new RegExp(`href="${slug}/index\\.html"`, 'g');
-      const exactPattern2 = new RegExp(`href="${slug}"(?!/)`, 'g');
-      if (content.match(exactPattern)) { content = content.replace(exactPattern, `href="/${slug}"`); modified = true; }
-      if (content.match(exactPattern2)) { content = content.replace(exactPattern2, `href="/${slug}"`); modified = true; }
-    });
-
-    fs.writeFileSync(f, content);
+    if (modified) {
+      fs.writeFileSync(f, content);
+    }
   });
 
   log(`  Discovered ${routes.length} routes: ${routes.map(r => r.path).join(', ')}`);
