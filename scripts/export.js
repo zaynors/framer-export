@@ -26,6 +26,11 @@ function log(msg) { console.log(`[framer-export] ${msg}`); }
 function logStep(n, msg) { console.log(`\n[Step ${n}] ${msg}`); }
 function err(msg) { console.error(`[ERROR] ${msg}`); process.exit(1); }
 
+function routePathToLocalFile(routePath) {
+  const slug = routePath.replace(/^\//, '').replace(/\/$/, '');
+  return slug ? `${slug}/index.html` : 'index.html';
+}
+
 function exec(cmd) {
   try {
     return execSync(cmd, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
@@ -537,7 +542,7 @@ function fixSpaRouting(htmlPath, baseDir, sourceUrl) {
       routeMatches.forEach(m => {
         const routePath = m.match(/path:`([^`]+)`/)[1];
         if (!routes.find(r => r.path === routePath)) {
-          routes.push({ path: routePath, file: 'index.html' });
+          routes.push({ path: routePath, file: routePathToLocalFile(routePath) });
         }
       });
     }
@@ -557,7 +562,7 @@ function fixSpaRouting(htmlPath, baseDir, sourceUrl) {
           const u = new URL(url);
           const routePath = u.pathname;
           if (!routes.find(r => r.path === routePath)) {
-            routes.push({ path: routePath, file: 'index.html' });
+            routes.push({ path: routePath, file: routePathToLocalFile(routePath) });
           }
         } catch(e) {}
       });
@@ -812,15 +817,15 @@ Options:
         if (routePath === '/') continue;
 
         // Determine local file path: /blogs → blogs/index.html
-        const slug = routePath.replace(/^\//, '').replace(/\/$/, '');
-        const dirPath = path.join(baseDir, slug);
-        const pageHtmlPath = path.join(dirPath, 'index.html');
+        const localFilePath = routePathToLocalFile(routePath);
+        const dirPath = path.join(baseDir, path.dirname(localFilePath));
+        const pageHtmlPath = path.join(baseDir, localFilePath);
 
         if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
 
         // Download the full pre-rendered HTML page
         curl(pageUrl, pageHtmlPath, sourceUrl);
-        log(`  Downloaded page: ${routePath} → ${slug}/index.html`);
+        log(`  Downloaded page: ${routePath} → ${localFilePath}`);
 
         // Remove data-framer-hydrate-v2 from this page - it contains the HOME page's routeId
         // which would cause Framer JS to render home content instead of this page's content
@@ -949,4 +954,10 @@ Options:
   log('  3. Test all routes including sub-pages and refresh on each');
 }
 
-main();
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  routePathToLocalFile,
+};
