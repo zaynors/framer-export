@@ -821,6 +821,12 @@ Options:
         // Download the full pre-rendered HTML page
         curl(pageUrl, pageHtmlPath, sourceUrl);
         log(`  Downloaded page: ${routePath} → ${slug}/index.html`);
+
+        // Remove data-framer-hydrate-v2 from this page - it contains the HOME page's routeId
+        // which would cause Framer JS to render home content instead of this page's content
+        const pageContent = fs.readFileSync(pageHtmlPath, 'utf8');
+        const fixedContent = pageContent.replace(/\s*data-framer-hydrate-v2="[^"]*"/g, '');
+        fs.writeFileSync(pageHtmlPath, fixedContent);
       }
     } catch(e) {
       log(`  Warning: Could not download sitemap pages: ${e.message}`);
