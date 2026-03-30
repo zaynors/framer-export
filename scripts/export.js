@@ -579,43 +579,38 @@ function fixSpaRouting(htmlPath, baseDir, sourceUrl) {
   // Get list of known route slugs for link fixing
   const knownDirs = routes.filter(r => r.path !== '/').map(r => r.path.replace(/^\//, '').replace(/\/$/, ''));
 
-  // Fix nav links in ALL HTML files (both main index.html and per-route pages)
-  // - ./slug/ → /slug
-  // - ./slug → /slug
-  // - slug/index.html → /slug
+  // Fix nav links in ALL HTML files - make relative paths absolute
+  // This ensures links like ./blogs or ./pricing work correctly from any page
   allHtmlFiles.forEach(f => {
     let content = fs.readFileSync(f, 'utf8');
     let modified = false;
 
-    knownDirs.forEach(slug => {
-      // Fix relative paths to absolute paths
-      const relPathPattern = new RegExp(`href="${slug}/index\\.html"`, 'g');
-      const relPathPattern2 = new RegExp(`href="${slug}\\.html"`, 'g');
-      const relPathPattern3 = new RegExp(`href="${slug}/"`, 'g');
-      const relPathPattern4 = new RegExp(`href="./${slug}"`, 'g');
-
-      if (content.match(relPathPattern)) { content = content.replace(relPathPattern, `href="/${slug}"`); modified = true; }
-      if (content.match(relPathPattern2)) { content = content.replace(relPathPattern2, `href="/${slug}"`); modified = true; }
-      if (content.match(relPathPattern3)) { content = content.replace(relPathPattern3, `href="/${slug}"`); modified = true; }
-      if (content.match(relPathPattern4)) { content = content.replace(relPathPattern4, `href="/${slug}"`); modified = true; }
+    // Replace ./ with / for internal page links (not files with extensions, not external URLs)
+    content = content.replace(/href="\.\/([^"]+)"/g, (m, p) => {
+      // Skip if it looks like a file reference (has extension before first ? or #)
+      if (p.includes('.') && !p.includes('/')) return m;
+      // Skip external URLs
+      if (p.startsWith('http') || p.startsWith('//')) return m;
+      // Skip anchors
+      if (p.startsWith('#')) return m;
+      // Skip query-only paths
+      if (p.startsWith('?')) return m;
+      return `href="/${p.replace(/^\/+/, '')}"`;
     });
 
-    // Also fix root relative paths
+    // Also fix href="./" (root link)
     content = content.replace(/href="\.\/"/g, 'href="/"');
-    content = content.replace(/href="\.\//g, (m) => 'href="' + m.slice(7).replace(/\//g, '/').replace(/^\/+/, '/'));
 
-    // Fix any remaining ./hrefs that are page links
-    content = content.replace(/href="\.\/([^".]+)"/g, (m, p) => {
-      // Only fix if it looks like a route (no file extension)
-      if (!p.includes('.') && !p.includes('#')) {
-        return `href="/${p.replace(/^\//, '')}"`;
-      }
-      return m;
+    // Fix any href that points to a route slug we know (e.g., href="blogs" → href="/blogs")
+    knownDirs.forEach(slug => {
+      // Match href="blogs" or href="blogs/" when it's a top-level route
+      const exactPattern = new RegExp(`href="${slug}/index\\.html"`, 'g');
+      const exactPattern2 = new RegExp(`href="${slug}"(?!/)`, 'g');
+      if (content.match(exactPattern)) { content = content.replace(exactPattern, `href="/${slug}"`); modified = true; }
+      if (content.match(exactPattern2)) { content = content.replace(exactPattern2, `href="/${slug}"`); modified = true; }
     });
 
-    if (modified) {
-      fs.writeFileSync(f, content);
-    }
+    fs.writeFileSync(f, content);
   });
 
   log(`  Discovered ${routes.length} routes: ${routes.map(r => r.path).join(', ')}`);
@@ -789,7 +784,10 @@ Options:
     htmlPath = tmpHtml;
   }
 
-  // NEW APPROACH: Download each page's pre-rendered HTML from Framer using sitemap
+  // Step 1: Analyze homepage to get initial asset lists (JS, CSS, images)
+  const analysis = analyzeSite(htmlPath, baseDir);
+
+  // Step 2: NEW APPROACH - Download each page's pre-rendered HTML from Framer using sitemap
   // This gives us fully pre-rendered page content instead of relying on JS dynamic loading
   if (sourceUrl) {
     try {
@@ -807,7 +805,7 @@ Options:
         // Skip homepage (already downloaded)
         if (routePath === '/') continue;
 
-        // Determine local file path: /blogs → blogs/index.html, /pricing → pricing/index.html
+        // Determine local file path: /blogs → blogs/index.html
         const slug = routePath.replace(/^\//, '').replace(/\/$/, '');
         const dirPath = path.join(baseDir, slug);
         const pageHtmlPath = path.join(dirPath, 'index.html');
@@ -823,7 +821,44 @@ Options:
     }
   }
 
-  const analysis = analyzeSite(htmlPath, baseDir);
+  // Step 3: Re-extract URLs from ALL downloaded HTML pages (homepage + per-route pages)
+  // This ensures we catch media URLs (video, audio) that appear in sub-pages
+  log('Scanning all HTML pages for additional assets...');
+  const allHtmlFiles = [htmlPath];
+  const pagesDir = baseDir;
+  if (fs.existsSync(pagesDir)) {
+    const entries = fs.readdirSync(pagesDir, { withFileTypes: true });
+    entries.forEach(entry => {
+      if (entry.isDirectory()) {
+        const indexPath = path.join(pagesDir, entry.name, 'index.html');
+        if (fs.existsSync(indexPath)) {
+          allHtmlFiles.push(indexPath);
+        }
+      }
+    });
+  }
+
+  const allHtmlContent = allHtmlFiles.map(f => fs.readFileSync(f, 'utf8')).join('\n');
+  const allUrlsInPages = [...new Set([...allHtmlContent.matchAll(/https?:\/\/[^"'>` )]+/g)].map(m => m[0]))];
+
+  // Find media URLs (video, audio) from all pages - Framer uses video.framer.com CDN
+  const mediaExtensions = /\.(mp4|webm|ogg|mov|avi|mkv|wmv|mp3|wav|flac|aac|opus)(\?|$)/i;
+  const mediaUrlsFromPages = allUrlsInPages.filter(u =>
+    mediaExtensions.test(u) ||
+    u.includes('video.framer.com/') ||
+    u.includes('framerusercontent.com/files/') ||
+    u.includes('framerusercontent.com/sites/')
+  );
+
+  // Dedupe with already-found media
+  const existingMedia = new Set(analysis.mediaUrls);
+  const newMediaUrls = mediaUrlsFromPages.filter(u => !existingMedia.has(u));
+  if (newMediaUrls.length > 0) {
+    log(`Found ${newMediaUrls.length} additional media URLs from downloaded pages`);
+    analysis.mediaUrls.push(...newMediaUrls);
+  }
+
+  // Step 4: Download all assets
   const downloadedAssets = downloadAssets(analysis, { htmlPath, baseDir, skipFonts: !opts.withFonts, sourceUrl });
 
   // Extract dynamic import URLs from downloaded JS files and download any missing modules
