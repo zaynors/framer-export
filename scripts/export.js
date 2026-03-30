@@ -567,25 +567,7 @@ function fixSpaRouting(htmlPath, baseDir, sourceUrl) {
 
   findHtmlFiles(baseDir);
 
-  const knownDirs = routes.filter(r => r.path !== '/').map(r => r.path.replace(/^\//, ''));
-
-  // Delete empty directories that would override SPA routes
-  knownDirs.forEach(slug => {
-    const dirPath = path.join(baseDir, slug);
-    if (fs.existsSync(dirPath) && fs.statSync(dirPath).isDirectory()) {
-      const entries = fs.readdirSync(dirPath);
-      const isEmptyDir = entries.every(e => {
-        const full = path.join(dirPath, e);
-        return fs.statSync(full).isDirectory() && fs.readdirSync(full).length === 0;
-      });
-      if (isEmptyDir) {
-        fs.rmdirSync(dirPath);
-        log(`  Removed empty SPA override dir: ${slug}/`);
-      }
-    }
-  });
-
-  // Update nav links from .html paths to SPA routes in all HTML files
+  // Get list of all HTML files (including the downloaded per-route pages)
   const allHtmlFiles = [htmlPath];
   routes.forEach(r => {
     if (r.file !== 'index.html') {
@@ -594,14 +576,46 @@ function fixSpaRouting(htmlPath, baseDir, sourceUrl) {
     }
   });
 
+  // Get list of known route slugs for link fixing
+  const knownDirs = routes.filter(r => r.path !== '/').map(r => r.path.replace(/^\//, '').replace(/\/$/, ''));
+
+  // Fix nav links in ALL HTML files (both main index.html and per-route pages)
+  // - ./slug/ → /slug
+  // - ./slug → /slug
+  // - slug/index.html → /slug
   allHtmlFiles.forEach(f => {
     let content = fs.readFileSync(f, 'utf8');
+    let modified = false;
+
     knownDirs.forEach(slug => {
-      content = content.replace(new RegExp(`href="${slug}/index\\.html"`, 'g'), `href="/${slug}"`);
-      content = content.replace(new RegExp(`href="${slug}\\.html"`, 'g'), `href="/${slug}"`);
-      content = content.replace(new RegExp(`href="${slug}/"`, 'g'), `href="/${slug}"`);
+      // Fix relative paths to absolute paths
+      const relPathPattern = new RegExp(`href="${slug}/index\\.html"`, 'g');
+      const relPathPattern2 = new RegExp(`href="${slug}\\.html"`, 'g');
+      const relPathPattern3 = new RegExp(`href="${slug}/"`, 'g');
+      const relPathPattern4 = new RegExp(`href="./${slug}"`, 'g');
+
+      if (content.match(relPathPattern)) { content = content.replace(relPathPattern, `href="/${slug}"`); modified = true; }
+      if (content.match(relPathPattern2)) { content = content.replace(relPathPattern2, `href="/${slug}"`); modified = true; }
+      if (content.match(relPathPattern3)) { content = content.replace(relPathPattern3, `href="/${slug}"`); modified = true; }
+      if (content.match(relPathPattern4)) { content = content.replace(relPathPattern4, `href="/${slug}"`); modified = true; }
     });
-    fs.writeFileSync(f, content);
+
+    // Also fix root relative paths
+    content = content.replace(/href="\.\/"/g, 'href="/"');
+    content = content.replace(/href="\.\//g, (m) => 'href="' + m.slice(7).replace(/\//g, '/').replace(/^\/+/, '/'));
+
+    // Fix any remaining ./hrefs that are page links
+    content = content.replace(/href="\.\/([^".]+)"/g, (m, p) => {
+      // Only fix if it looks like a route (no file extension)
+      if (!p.includes('.') && !p.includes('#')) {
+        return `href="/${p.replace(/^\//, '')}"`;
+      }
+      return m;
+    });
+
+    if (modified) {
+      fs.writeFileSync(f, content);
+    }
   });
 
   log(`  Discovered ${routes.length} routes: ${routes.map(r => r.path).join(', ')}`);
@@ -773,6 +787,40 @@ Options:
     const tmpHtml = path.join(baseDir, 'index.html');
     exec(`curl -sL "${htmlPath}" -o "${tmpHtml}"`);
     htmlPath = tmpHtml;
+  }
+
+  // NEW APPROACH: Download each page's pre-rendered HTML from Framer using sitemap
+  // This gives us fully pre-rendered page content instead of relying on JS dynamic loading
+  if (sourceUrl) {
+    try {
+      const sitemapUrl = sourceUrl.replace(/\/$/, '') + '/sitemap.xml';
+      const sitemapPath = path.join(TMP, 'framer-export-sitemap.xml');
+      curl(sitemapUrl, sitemapPath);
+      const sitemap = fs.readFileSync(sitemapPath, 'utf8');
+      const pageUrls = [...sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)].map(m => m[1]);
+      log(`Found ${pageUrls.length} pages from sitemap.xml`);
+
+      for (const pageUrl of pageUrls) {
+        const u = new URL(pageUrl);
+        const routePath = u.pathname;
+
+        // Skip homepage (already downloaded)
+        if (routePath === '/') continue;
+
+        // Determine local file path: /blogs → blogs/index.html, /pricing → pricing/index.html
+        const slug = routePath.replace(/^\//, '').replace(/\/$/, '');
+        const dirPath = path.join(baseDir, slug);
+        const pageHtmlPath = path.join(dirPath, 'index.html');
+
+        if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
+
+        // Download the full pre-rendered HTML page
+        curl(pageUrl, pageHtmlPath, sourceUrl);
+        log(`  Downloaded page: ${routePath} → ${slug}/index.html`);
+      }
+    } catch(e) {
+      log(`  Warning: Could not download sitemap pages: ${e.message}`);
+    }
   }
 
   const analysis = analyzeSite(htmlPath, baseDir);
